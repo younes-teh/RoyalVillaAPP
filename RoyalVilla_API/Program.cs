@@ -43,7 +43,7 @@ builder.Services.AddAuthentication(option =>
 
 });
 
-
+builder.Services.AddScoped<IImageService, ImageServcie>();
 builder.Services.AddApiVersioning(options =>
 {
     options.AssumeDefaultVersionWhenUnspecified = true;
@@ -71,7 +71,7 @@ foreach (var description in builderProvider.ApiVersionDescriptions)
     var versionNumber = description.ApiVersion.ToString();
     var displayName = $"Demo API -- {versionNumber}";
 
-    builder.Services.AddOpenApi(versionName,options =>
+    builder.Services.AddOpenApi(versionName, options =>
     {
         options.AddDocumentTransformer((document, context, cancellationToken) =>
         {
@@ -161,6 +161,7 @@ if (app.Environment.IsDevelopment())
 
     });
 }
+app.UseStaticFiles();
 app.UseCors(o => o.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod().WithExposedHeaders("*"));
 app.UseHttpsRedirection();
 app.UseAuthentication();
