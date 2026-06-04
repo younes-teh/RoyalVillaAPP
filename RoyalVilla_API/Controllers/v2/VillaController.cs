@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using RoyalVilla.DTO;
 using RoyalVilla_API.Data;
 using RoyalVilla_API.Models;
+using RoyalVilla_API.Services.IServices;
 using System.Collections;
 
 namespace RoyalVilla_API.Controllers.v2
@@ -19,11 +20,13 @@ namespace RoyalVilla_API.Controllers.v2
     public class VillaController : ControllerBase
     {
         private readonly ApplicationDbContext _db;
+        private readonly IImageService _imageService;
         private readonly IMapper _mapper;
 
-        public VillaController(ApplicationDbContext db, IMapper mapper)
+        public VillaController(ApplicationDbContext db, IMapper mapper, IImageService imageService)
         {
             _db = db;
+            _imageService = imageService;
             _mapper = mapper;
         }
 
@@ -42,7 +45,7 @@ namespace RoyalVilla_API.Controllers.v2
             if (pageSize < 1) pageSize = 10;
             if (pageSize > 100) pageSize = 100;
             var villasQuery = _db.Villa.AsQueryable();
-            if(!string.IsNullOrEmpty(filterQuery) && !string.IsNullOrEmpty(filterBy))
+            if (!string.IsNullOrEmpty(filterQuery) && !string.IsNullOrEmpty(filterBy))
             {
                 switch (filterBy.ToLower())
                 {
@@ -76,7 +79,7 @@ namespace RoyalVilla_API.Controllers.v2
                             villasQuery = villasQuery.Where(u => u.Occupancy == occupancy);
                         }
                         break;
-                }               
+                }
             }
 
             //sorting logic
@@ -96,7 +99,7 @@ namespace RoyalVilla_API.Controllers.v2
                     : villasQuery.OrderBy(u => u.Sqft),
                     "id" => isDescending ? villasQuery.OrderByDescending(u => u.Id)
                     : villasQuery.OrderBy(u => u.Id),
-                    _=> villasQuery.OrderBy(u=>u.Id)
+                    _ => villasQuery.OrderBy(u => u.Id)
                 };
             }
             else
@@ -111,7 +114,7 @@ namespace RoyalVilla_API.Controllers.v2
 
             var villas = await villasQuery.Skip(skip).Take(pageSize).ToListAsync();
             var dtoResponseVilla = _mapper.Map<List<VillaDTO>>(villas);
-            
+
 
             var messageBuilder = new System.Text.StringBuilder();
 
@@ -171,7 +174,7 @@ namespace RoyalVilla_API.Controllers.v2
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status500InternalServerError)]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status409Conflict)]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult<ApiResponse<VillaDTO>>> CreateVilla(VillaCreateDTO villaDTO)
+        public async Task<ActionResult<ApiResponse<VillaDTO>>> CreateVilla([FromForm] VillaCreateDTO villaDTO)
         {
             try
             {
@@ -189,6 +192,17 @@ namespace RoyalVilla_API.Controllers.v2
                 }
 
                 Villa villa = _mapper.Map<Villa>(villaDTO);
+
+
+
+                if (villaDTO.Image != null)
+                {
+                    if (!_imageService.ValidateImage(villaDTO.Image))
+                    {
+                        return BadRequest(ApiResponse<object>.BadRequest("Invalid image file. Allowed formats: jpg, jpeg, png. Max size: 5MB"));
+                    }
+                    villa.ImageUrl = await _imageService.UploadImageAsync(villaDTO.Image);
+                }
 
                 await _db.Villa.AddAsync(villa);
                 await _db.SaveChangesAsync();
@@ -211,7 +225,7 @@ namespace RoyalVilla_API.Controllers.v2
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status409Conflict)]
         [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult<ApiResponse<VillaDTO>>> UpdateVilla(int id, VillaUpdateDTO villaDTO)
+        public async Task<ActionResult<ApiResponse<VillaDTO>>> UpdateVilla(int id, [FromForm] VillaUpdateDTO villaDTO)
         {
             try
             {
@@ -225,6 +239,11 @@ namespace RoyalVilla_API.Controllers.v2
                     return BadRequest(ApiResponse<object>.BadRequest("Villa ID in URL does not match Villa ID in request body"));
                 }
 
+
+                if (villaDTO.Image != null && !_imageService.ValidateImage(villaDTO.Image))
+                {
+                    return BadRequest(ApiResponse<object>.BadRequest("Invalid image file. Allowed formats: jpg, jpeg, png. Max size: 5MB"));
+                }
 
                 var existingVilla = await _db.Villa.FirstOrDefaultAsync(u => u.Id == id);
 
@@ -241,8 +260,22 @@ namespace RoyalVilla_API.Controllers.v2
                     return Conflict(ApiResponse<object>.Conflict($"A villa with the name '{villaDTO.Name}' already exists"));
                 }
 
+                var oldImageUrl = existingVilla.ImageUrl;
+
                 _mapper.Map(villaDTO, existingVilla);
                 existingVilla.UpdatedDate = DateTime.Now;
+
+
+                if (villaDTO.Image != null)
+                {
+                    existingVilla.ImageUrl = await _imageService.UploadImageAsync(villaDTO.Image);
+
+                    if (!string.IsNullOrEmpty(oldImageUrl) && oldImageUrl != existingVilla.ImageUrl)
+                    {
+                        await _imageService.DeleteImageAsync(oldImageUrl);
+                    }
+                }
+
 
                 await _db.SaveChangesAsync();
                 var response = ApiResponse<VillaDTO>.Ok(_mapper.Map<VillaDTO>(villaDTO), "Villa updated successfully");
@@ -251,7 +284,7 @@ namespace RoyalVilla_API.Controllers.v2
             }
             catch (Exception ex)
             {
-                var errorResponse = ApiResponse<object>.Error(500, "An error occurred while creating the villa:", ex.Message);
+                var errorResponse = ApiResponse<object>.Error(500, "An error occurred while updating the villa:", ex.Message);
                 return StatusCode(500, errorResponse);
             }
         }
@@ -273,6 +306,12 @@ namespace RoyalVilla_API.Controllers.v2
                     return NotFound(ApiResponse<object>.NotFound($"Villa with ID {id} was not found"));
                 }
 
+
+                if (!string.IsNullOrEmpty(existingVilla.ImageUrl))
+                {
+                    await _imageService.DeleteImageAsync(existingVilla.ImageUrl);
+                }
+
                 _db.Villa.Remove(existingVilla);
                 await _db.SaveChangesAsync();
 
@@ -282,7 +321,7 @@ namespace RoyalVilla_API.Controllers.v2
             }
             catch (Exception ex)
             {
-                var errorResponse = ApiResponse<object>.Error(500, "An error occurred while creating the villa:", ex.Message);
+                var errorResponse = ApiResponse<object>.Error(500, "An error occurred while deleting the villa:", ex.Message);
                 return StatusCode(500, errorResponse);
             }
         }
